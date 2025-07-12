@@ -1,23 +1,22 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using System.Text.Json;
+
+class MergeLog
+{
+    public string Type { get; set; }
+    public string Name { get; set; }
+    public string Location { get; set; }
+    public string Strategy { get; set; }
+}
 
 class Program
 {
-
-    class ConflictEntry
-    {
-        public string Type { get; set; } = "method";
-        public string Class { get; set; }
-        public string Method { get; set; }
-        public string File1Body { get; set; }
-        public string File2Body { get; set; }
-    }
     static void Main(string[] args)
     {
         if (args.Length != 2)
@@ -26,100 +25,114 @@ class Program
             return;
         }
 
-        string code1 = File.ReadAllText(args[0]);
-        string code2 = File.ReadAllText(args[1]);
+            string code1 = File.ReadAllText(args[0]);
+    string code2 = File.ReadAllText(args[1]);
 
-        var tree1 = CSharpSyntaxTree.ParseText(code1);
-        var tree2 = CSharpSyntaxTree.ParseText(code2);
+    var tree1 = CSharpSyntaxTree.ParseText(code1);
+    var tree2 = CSharpSyntaxTree.ParseText(code2);
 
-        var root1 = tree1.GetCompilationUnitRoot();
-        var root2 = tree2.GetCompilationUnitRoot();
+    var root1 = tree1.GetCompilationUnitRoot();
+    var root2 = tree2.GetCompilationUnitRoot();
 
-        var mergedRoot = root1;
-        var conflicts = new List<ConflictEntry>();
+    var logs = new List<MergeLog>();
 
-        // Track existing class names and method bodies
-        var classDict1 = GetClassesWithMethods(root1);
-        var classDict2 = GetClassesWithMethods(root2);
+    // Map of all classes in file1
+    var classMap = new Dictionary<string, ClassDeclarationSyntax>();
 
-        foreach (var kvp in classDict2)
+    foreach (var member in root1.Members.OfType<NamespaceDeclarationSyntax>())
+    {
+        foreach (var cls in member.Members.OfType<ClassDeclarationSyntax>())
         {
-            string className = kvp.Key;
-            var classNode2 = kvp.Value;
-            if (classDict1.TryGetValue(className, out var classNode1))
+            string fqcn = $"{member.Name}.{cls.Identifier.Text}";
+            classMap[fqcn] = cls;
+        }
+    }
+
+    var newMembers = new List<MemberDeclarationSyntax>();
+
+    foreach (var ns2 in root2.Members.OfType<NamespaceDeclarationSyntax>())
+    {
+        var newClasses = new List<MemberDeclarationSyntax>();
+
+        foreach (var cls2 in ns2.Members.OfType<ClassDeclarationSyntax>())
+        {
+            string fqcn = $"{ns2.Name}.{cls2.Identifier.Text}";
+
+            if (classMap.TryGetValue(fqcn, out var cls1))
             {
-                var updatedClass = classNode1;
+                var methods1 = cls1.Members.OfType<MethodDeclarationSyntax>().ToDictionary(m => m.Identifier.Text);
+                var methods2 = cls2.Members.OfType<MethodDeclarationSyntax>();
 
-                var methodDict1 = classNode1.Members
-                    .OfType<MethodDeclarationSyntax>()
-                    .ToDictionary(m => m.Identifier.Text + m.ParameterList.ToFullString());
+                var mergedMethods = new List<MemberDeclarationSyntax>();
 
-                foreach (var method2 in classNode2.Members.OfType<MethodDeclarationSyntax>())
+                // Process methods from file1, add comment
+                foreach (var m1 in cls1.Members.OfType<MethodDeclarationSyntax>())
                 {
-                    string signature = method2.Identifier.Text + method2.ParameterList.ToFullString();
+                    var m1WithComment = m1.WithLeadingTrivia(
+                        SyntaxFactory.TriviaList(
+                            SyntaxFactory.Comment("// From first file")
+                        )
+                    );
+                    mergedMethods.Add(m1WithComment);
+                }
 
-                    if (methodDict1.TryGetValue(signature, out var method1))
+                // Process methods from file2
+                foreach (var m2 in methods2)
+                {
+                    if (methods1.TryGetValue(m2.Identifier.Text, out var m1))
                     {
-                        // Compare bodies
-                        if (method1.Body?.ToFullString().Trim() != method2.Body?.ToFullString().Trim())
+                        if (!m1.Body?.ToFullString().Trim().Equals(m2.Body?.ToFullString().Trim()) ?? false)
                         {
-                            conflicts.Add(new ConflictEntry
+                            logs.Add(new MergeLog
                             {
-                                Class = className,
-                                Method = method2.Identifier.Text,
-                                File1Body = method1.Body?.ToFullString()?.Trim(),
-                                File2Body = method2.Body?.ToFullString()?.Trim()
+                                Type = "MethodConflict",
+                                Name = m2.Identifier.Text,
+                                Location = fqcn,
+                                Strategy = "BothKeptWithComments"
                             });
+
+                            var m2WithComment = m2.WithLeadingTrivia(
+                                SyntaxFactory.TriviaList(
+                                    SyntaxFactory.Comment("// CONFLICT: From second file (logic differs)")
+                                )
+                            );
+                            mergedMethods.Add(m2WithComment);
                         }
-                        // else, identical: skip
                     }
                     else
                     {
-                        updatedClass = updatedClass.AddMembers(method2);
+                        mergedMethods.Add(m2);
                     }
                 }
 
-                mergedRoot = ReplaceClass(mergedRoot, classNode1, updatedClass);
+                var mergedClass = cls1.WithMembers(SyntaxFactory.List(mergedMethods));
+                newClasses.Add(mergedClass);
             }
             else
             {
-                // New class from file2
-                mergedRoot = mergedRoot.AddMembers(classNode2);
+                logs.Add(new MergeLog
+                {
+                    Type = "ClassMerged",
+                    Name = cls2.Identifier.Text,
+                    Location = fqcn,
+                    Strategy = "AddedFromSecondFile"
+                });
+
+                newClasses.Add(cls2);
             }
         }
 
-        Console.WriteLine(mergedRoot.NormalizeWhitespace().ToFullString());
-
-        // Emit separator + JSON conflict log to stderr
-        Console.Error.WriteLine("===MERGEAI_CONFLICTS_START===");
-        Console.Error.WriteLine(JsonSerializer.Serialize(conflicts, new JsonSerializerOptions { WriteIndented = true }));
-        Console.Error.WriteLine("===MERGEAI_CONFLICTS_END===");
+        var mergedNS = ns2.WithMembers(SyntaxFactory.List(newClasses));
+        newMembers.Add(mergedNS);
     }
 
-    static Dictionary<string, ClassDeclarationSyntax> GetClassesWithMethods(CompilationUnitSyntax root)
-    {
-        var result = new Dictionary<string, ClassDeclarationSyntax>();
+    var finalRoot = root1.AddMembers(newMembers.ToArray());
 
-        foreach (var ns in root.Members.OfType<NamespaceDeclarationSyntax>())
-        {
-            foreach (var cls in ns.Members.OfType<ClassDeclarationSyntax>())
-            {
-                string fullName = ns.Name.ToString() + "." + cls.Identifier.Text;
-                result[fullName] = cls;
-            }
-        }
+    Console.WriteLine(finalRoot.NormalizeWhitespace().ToFullString());
 
-        foreach (var cls in root.Members.OfType<ClassDeclarationSyntax>())
-        {
-            result[cls.Identifier.Text] = cls;
-        }
-
-        return result;
-    }
-
-    static CompilationUnitSyntax ReplaceClass(CompilationUnitSyntax root, ClassDeclarationSyntax oldClass, ClassDeclarationSyntax newClass)
-    {
-        return root.ReplaceNode(oldClass, newClass);
+    Console.Error.WriteLine("===MERGEAI_CONFLICTS_START===");
+    Console.Error.WriteLine(JsonSerializer.Serialize(logs, new JsonSerializerOptions { WriteIndented = false }));
+    Console.Error.WriteLine("===MERGEAI_CONFLICTS_END===");
     }
 
 }

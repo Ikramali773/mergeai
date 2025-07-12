@@ -76,3 +76,4 @@ E:\mergeai\roslyn_merger\roslyn_merger\obj\Release\net9.0\refint\roslyn_merger.d
 E:\mergeai\roslyn_merger\roslyn_merger\obj\Release\net9.0\roslyn_merger.pdb
 E:\mergeai\roslyn_merger\roslyn_merger\obj\Release\net9.0\roslyn_merger.genruntimeconfig.cache
 E:\mergeai\roslyn_merger\roslyn_merger\obj\Release\net9.0\ref\roslyn_merger.dll
+E:\mergeai\roslyn_merger\roslyn_merger\obj\Release\net9.0\roslyn_merger.sourcelink.json

@@ -1,0 +1,29 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "roslyn_merger", "roslyn_merger", "{6CE9E076-1439-5679-8943-38F280199BCB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "roslyn_merger", "roslyn_merger\roslyn_merger\roslyn_merger.csproj", "{70C74935-1E88-082A-B5F6-593BA6D2AB70}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{70C74935-1E88-082A-B5F6-593BA6D2AB70}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{70C74935-1E88-082A-B5F6-593BA6D2AB70}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{70C74935-1E88-082A-B5F6-593BA6D2AB70}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{70C74935-1E88-082A-B5F6-593BA6D2AB70}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{70C74935-1E88-082A-B5F6-593BA6D2AB70} = {6CE9E076-1439-5679-8943-38F280199BCB}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {61884812-8D8A-42F7-93B0-E5D2B49C8F4C}
+	EndGlobalSection
+EndGlobal
