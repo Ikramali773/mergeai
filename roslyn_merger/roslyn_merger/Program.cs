@@ -7,132 +7,223 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
+// Represents one conflict entry for the user to resolve
 class MergeLog
 {
-    public string Type { get; set; }
-    public string Name { get; set; }
-    public string Location { get; set; }
-    public string Strategy { get; set; }
+    public int    Id       { get; set; }
+    public string Type     { get; set; }   // e.g. "MethodConflict"
+    public string Name     { get; set; }   // method or class name
+    public string Location { get; set; }   // namespace.class
+    public string Strategy { get; set; }   // default strategy
+}
+
+// Represents the user’s decision for a given conflict
+class Resolution
+{
+    public int    Id     { get; set; }
+    public string Choice { get; set; }     // "A", "B", or "Both"
 }
 
 class Program
 {
     static void Main(string[] args)
     {
-        if (args.Length != 2)
+        if (args.Length < 2 || args.Length > 3)
         {
-            Console.WriteLine("Usage: roslyn_merger <file1.cs> <file2.cs>");
+            Console.WriteLine("Usage: roslyn_merger <file1.cs> <file2.cs> [resolutions.json]");
             return;
         }
 
-            string code1 = File.ReadAllText(args[0]);
-    string code2 = File.ReadAllText(args[1]);
+        string file1 = args[0];
+        string file2 = args[1];
 
-    var tree1 = CSharpSyntaxTree.ParseText(code1);
-    var tree2 = CSharpSyntaxTree.ParseText(code2);
-
-    var root1 = tree1.GetCompilationUnitRoot();
-    var root2 = tree2.GetCompilationUnitRoot();
-
-    var logs = new List<MergeLog>();
-
-    // Map of all classes in file1
-    var classMap = new Dictionary<string, ClassDeclarationSyntax>();
-
-    foreach (var member in root1.Members.OfType<NamespaceDeclarationSyntax>())
-    {
-        foreach (var cls in member.Members.OfType<ClassDeclarationSyntax>())
+        // Load optional resolutions
+        var resolutions = new Dictionary<int, string>();
+        if (args.Length == 3)
         {
-            string fqcn = $"{member.Name}.{cls.Identifier.Text}";
-            classMap[fqcn] = cls;
+            var json = File.ReadAllText(args[2]);
+            var resList = JsonSerializer.Deserialize<List<Resolution>>(json);
+            foreach (var r in resList)
+                resolutions[r.Id] = r.Choice;  // map conflictId -> "A"/"B"/"Both"
         }
-    }
 
-    var newMembers = new List<MemberDeclarationSyntax>();
+        var code1 = File.ReadAllText(file1);
+        var code2 = File.ReadAllText(file2);
 
-    foreach (var ns2 in root2.Members.OfType<NamespaceDeclarationSyntax>())
-    {
-        var newClasses = new List<MemberDeclarationSyntax>();
+        var tree1 = CSharpSyntaxTree.ParseText(code1);
+        var tree2 = CSharpSyntaxTree.ParseText(code2);
 
-        foreach (var cls2 in ns2.Members.OfType<ClassDeclarationSyntax>())
+        var root1 = tree1.GetCompilationUnitRoot();
+        var root2 = tree2.GetCompilationUnitRoot();
+
+        var logs = new List<MergeLog>();
+        int logCounter = 0;
+
+        // Build class lookup from file1
+        var classMap = new Dictionary<string, ClassDeclarationSyntax>();
+        foreach (var ns in root1.Members.OfType<NamespaceDeclarationSyntax>())
+            foreach (var cls in ns.Members.OfType<ClassDeclarationSyntax>())
+                classMap[$"{ns.Name}.{cls.Identifier.Text}"] = cls;
+
+        var mergedMembers = new List<MemberDeclarationSyntax>(root1.Members);
+
+        // Process namespaces in file2
+        foreach (var ns2 in root2.Members.OfType<NamespaceDeclarationSyntax>())
         {
-            string fqcn = $"{ns2.Name}.{cls2.Identifier.Text}";
+            var classesInNs = new List<MemberDeclarationSyntax>();
 
-            if (classMap.TryGetValue(fqcn, out var cls1))
+            foreach (var cls2 in ns2.Members.OfType<ClassDeclarationSyntax>())
             {
-                var methods1 = cls1.Members.OfType<MethodDeclarationSyntax>().ToDictionary(m => m.Identifier.Text);
-                var methods2 = cls2.Members.OfType<MethodDeclarationSyntax>();
+                string fqcn = $"{ns2.Name}.{cls2.Identifier.Text}";
 
-                var mergedMethods = new List<MemberDeclarationSyntax>();
-
-                // Process methods from file1, add comment
-                foreach (var m1 in cls1.Members.OfType<MethodDeclarationSyntax>())
+                // If class exists in file1
+                if (classMap.TryGetValue(fqcn, out var cls1))
                 {
-                    var m1WithComment = m1.WithLeadingTrivia(
-                        SyntaxFactory.TriviaList(
-                            SyntaxFactory.Comment("// From first file")
-                        )
-                    );
-                    mergedMethods.Add(m1WithComment);
-                }
+                    var mergedMethods = new List<MemberDeclarationSyntax>();
 
-                // Process methods from file2
-                foreach (var m2 in methods2)
-                {
-                    if (methods1.TryGetValue(m2.Identifier.Text, out var m1))
+                    // Add all methods from file1 (version A)
+                    foreach (var m1 in cls1.Members.OfType<MethodDeclarationSyntax>())
                     {
-                        if (!m1.Body?.ToFullString().Trim().Equals(m2.Body?.ToFullString().Trim()) ?? false)
-                        {
-                            logs.Add(new MergeLog
-                            {
-                                Type = "MethodConflict",
-                                Name = m2.Identifier.Text,
-                                Location = fqcn,
-                                Strategy = "BothKeptWithComments"
-                            });
+                        mergedMethods.Add(m1);
+                    }
 
-                            var m2WithComment = m2.WithLeadingTrivia(
-                                SyntaxFactory.TriviaList(
-                                    SyntaxFactory.Comment("// CONFLICT: From second file (logic differs)")
-                                )
-                            );
-                            mergedMethods.Add(m2WithComment);
+                    // Compare each method in file2
+                    foreach (var m2 in cls2.Members.OfType<MethodDeclarationSyntax>())
+                    {
+                        var sig = m2.Identifier.Text + m2.ParameterList.ToString();
+                        var conflictWith = cls1.Members
+                            .OfType<MethodDeclarationSyntax>()
+                            .FirstOrDefault(m1 => m1.Identifier.Text + m1.ParameterList.ToString() == sig);
+
+                        if (conflictWith != null)
+                        {
+                            // bodies differ?
+                            bool differs = 
+                                (conflictWith.Body?.ToFullString().Trim() != m2.Body?.ToFullString().Trim());
+
+                            if (differs)
+                            {
+                                // Register conflict
+                                var log = new MergeLog {
+                                    Id       = ++logCounter,
+                                    Type     = "MethodConflict",
+                                    Name     = m2.Identifier.Text,
+                                    Location = fqcn,
+                                    Strategy = "BothWithComments"
+                                };
+                                logs.Add(log);
+
+                                // Determine resolution
+                                resolutions.TryGetValue(log.Id, out var choice);
+
+                                if (choice == "A")
+                                {
+                                    // keep only version from file1 → do nothing
+                                }
+                                else if (choice == "B")
+                                {
+                                    // keep only version B
+                                    mergedMethods.Add(
+                                        m2.WithLeadingTrivia(SyntaxFactory.Comment("// Chosen: Version B"))
+                                    );
+                                }
+                                else // default or "Both"
+                                {
+                                    // keep both, with comments
+                                    mergedMethods.Add(
+                                        conflictWith.WithLeadingTrivia(
+                                            SyntaxFactory.Comment("// From File A")
+                                        )
+                                    );
+                                    mergedMethods.Add(
+                                        m2.WithLeadingTrivia(
+                                            SyntaxFactory.Comment("// From File B")
+                                        )
+                                    );
+                                }
+                            }
+                            else
+                            {
+                                // identical bodies: keep both with comments
+                                var logDup = new MergeLog {
+                                    Id       = ++logCounter,
+                                    Type     = "MethodDuplicate",
+                                    Name     = m2.Identifier.Text,
+                                    Location = fqcn,
+                                    Strategy = "BothWithComments"
+                                };
+                                logs.Add(logDup);
+
+                                resolutions.TryGetValue(logDup.Id, out var dupChoice);
+                                if (dupChoice == "B")
+                                {
+                                    mergedMethods.Add(
+                                        m2.WithLeadingTrivia(SyntaxFactory.Comment("// From File B"))
+                                    );
+                                }
+                                else if (dupChoice == "A")
+                                {
+                                    // do nothing (already in file1)
+                                }
+                                else
+                                {
+                                    // Both
+                                    mergedMethods.Add(
+                                        m2.WithLeadingTrivia(SyntaxFactory.Comment("// From File B"))
+                                    );
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // new method in file2
+                            mergedMethods.Add(m2);
+                            logs.Add(new MergeLog {
+                                Id       = ++logCounter,
+                                Type     = "MethodAdded",
+                                Name     = m2.Identifier.Text,
+                                Location = fqcn,
+                                Strategy = "AddedFromSecondFile"
+                            });
                         }
                     }
-                    else
-                    {
-                        mergedMethods.Add(m2);
-                    }
+
+                    // Replace the old class node with merged one
+                    var mergedClass = cls1.WithMembers(SyntaxFactory.List(mergedMethods));
+                    var ns1 = root1.Members
+                        .OfType<NamespaceDeclarationSyntax>()
+                        .First(ns => ns.Name.ToString() == ns2.Name.ToString());
+                    mergedMembers.Remove(ns1);
+                    mergedMembers.Add(
+                        ns1.WithMembers(
+                            ns1.Members.Replace(cls1, mergedClass)
+                        )
+                    );
                 }
-
-                var mergedClass = cls1.WithMembers(SyntaxFactory.List(mergedMethods));
-                newClasses.Add(mergedClass);
-            }
-            else
-            {
-                logs.Add(new MergeLog
+                else
                 {
-                    Type = "ClassMerged",
-                    Name = cls2.Identifier.Text,
-                    Location = fqcn,
-                    Strategy = "AddedFromSecondFile"
-                });
-
-                newClasses.Add(cls2);
+                    // New class from file2
+                    mergedMembers.Add(cls2);
+                    logs.Add(new MergeLog {
+                        Id       = ++logCounter,
+                        Type     = "ClassAdded",
+                        Name     = cls2.Identifier.Text,
+                        Location = fqcn,
+                        Strategy = "AddedFromSecondFile"
+                    });
+                }
             }
         }
 
-        var mergedNS = ns2.WithMembers(SyntaxFactory.List(newClasses));
-        newMembers.Add(mergedNS);
+        // Build final root
+        var finalRoot = root1.WithMembers(SyntaxFactory.List(mergedMembers));
+
+        // Output merged code
+        Console.WriteLine(finalRoot.NormalizeWhitespace().ToFullString());
+
+        // Output logs to stderr
+        Console.Error.WriteLine("===MERGEAI_CONFLICTS_START===");
+        Console.Error.WriteLine(JsonSerializer.Serialize(logs, new JsonSerializerOptions { WriteIndented = false }));
+        Console.Error.WriteLine("===MERGEAI_CONFLICTS_END===");
     }
-
-    var finalRoot = root1.AddMembers(newMembers.ToArray());
-
-    Console.WriteLine(finalRoot.NormalizeWhitespace().ToFullString());
-
-    Console.Error.WriteLine("===MERGEAI_CONFLICTS_START===");
-    Console.Error.WriteLine(JsonSerializer.Serialize(logs, new JsonSerializerOptions { WriteIndented = false }));
-    Console.Error.WriteLine("===MERGEAI_CONFLICTS_END===");
-    }
-
 }

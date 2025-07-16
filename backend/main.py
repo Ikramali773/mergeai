@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import subprocess
@@ -7,66 +7,125 @@ import os
 import uuid
 import json
 import re
+from typing import List, Dict
 
 app = FastAPI()
 
-# Enable CORS (adjust allow_origins in production)
+# Enable CORS (restrict this in production)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace with frontend URL in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Path to the compiled Roslyn CLI merger
+# Path to your compiled Roslyn CLI
 CLI_PATH = "../roslyn_merger/roslyn_merger/bin/Release/net9.0/roslyn_merger.dll"
+TMP = "/tmp"
 
-@app.post("/merge")
-async def merge_code(file1: UploadFile = File(...), file2: UploadFile = File(...)):
-    temp_dir = "/tmp"
-    os.makedirs(temp_dir, exist_ok=True)
+def save_upload(file: UploadFile) -> str:
+    """Save an UploadFile to /tmp and return its path."""
+    path = os.path.join(TMP, file.filename)
+    with open(path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    return path
 
-    tmp1_path = os.path.join(temp_dir, file1.filename)
-    tmp2_path = os.path.join(temp_dir, file2.filename)
+def write_json(obj, filename: str) -> str:
+    """Write JSON-serializable obj to /tmp/filename and return its path."""
+    path = os.path.join(TMP, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+    return path
 
-    # Save the uploaded files
-    with open(tmp1_path, "wb") as f:
-        shutil.copyfileobj(file1.file, f)
-    with open(tmp2_path, "wb") as f:
-        shutil.copyfileobj(file2.file, f)
-
-    # Generate a unique filename for the merged output
-    merged_filename = f"merged_{uuid.uuid4().hex}.cs"
-    merged_path = os.path.join(temp_dir, merged_filename)
-
-    # Run the Roslyn merger CLI
-    result = subprocess.run(
-        ["dotnet", CLI_PATH, tmp1_path, tmp2_path],
+def run_merger(args: List[str]) -> (str, List[Dict]):
+    """
+    Run `dotnet CLI_PATH` with given args.
+    Returns (stdout, parsed_logs).
+    """
+    proc = subprocess.run(
+        ["dotnet", CLI_PATH] + args,
         capture_output=True,
         text=True
     )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip())
 
-    # If Roslyn merger fails, return error
-    if result.returncode != 0:
-        return {"error": result.stderr.strip()}
+    merged_code = proc.stdout
 
-    # Save the merged code into a file
-    with open(merged_path, "w", encoding="utf-8") as f:
-        f.write(result.stdout)
-
-    # Extract structured logs from stderr if available
+    # Extract JSON logs from stderr
+    stderr = proc.stderr
     logs = []
-    match = re.search(
-        r"===MERGEAI_CONFLICTS_START===(.*?)===MERGEAI_CONFLICTS_END===",
-        result.stderr,
-        re.DOTALL
-    )
+    match = re.search(r"===MERGEAI_CONFLICTS_START===(.*?)===MERGEAI_CONFLICTS_END===",
+                      stderr, re.DOTALL)
     if match:
         try:
             logs = json.loads(match.group(1).strip())
-        except Exception as e:
-            logs = [{"type": "error", "message": f"Failed to parse logs: {str(e)}"}]
+        except json.JSONDecodeError:
+            logs = [{"type": "error", "message": "Failed to parse conflict logs"}]
+
+    return merged_code, logs
+
+@app.post("/merge")
+async def merge_code(file1: UploadFile = File(...),
+                     file2: UploadFile = File(...)):
+    # Ensure temp dir
+    os.makedirs(TMP, exist_ok=True)
+
+    # Save uploads
+    path1 = save_upload(file1)
+    path2 = save_upload(file2)
+
+    # Run CLI with 2 args
+    try:
+        merged_code, logs = run_merger([path1, path2])
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Write merged code to unique file
+    merged_filename = f"merged_{uuid.uuid4().hex}.cs"
+    merged_path = os.path.join(TMP, merged_filename)
+    with open(merged_path, "w", encoding="utf-8") as f:
+        f.write(merged_code)
+
+    return {
+        "merged_file": merged_filename,
+        "logs": logs,
+        "download_url": f"/download/{merged_filename}"
+    }
+
+@app.post("/merge/resolve")
+async def resolve_merge(
+    file1: UploadFile = File(...),
+    file2: UploadFile = File(...),
+    resolutions: List[Dict] = File(...),
+):
+    """
+    Expects:
+    - file1, file2: the original .cs files
+    - resolutions: JSON array of { "Id": int, "Choice": "A"|"B"|"Both" }
+    """
+    os.makedirs(TMP, exist_ok=True)
+
+    # Save uploads
+    path1 = save_upload(file1)
+    path2 = save_upload(file2)
+
+    # Save resolutions JSON
+    res_filename = f"resolutions_{uuid.uuid4().hex}.json"
+    res_path = write_json(resolutions, res_filename)
+
+    # Run CLI with 3 args
+    try:
+        merged_code, logs = run_merger([path1, path2, res_path])
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Write final merged code
+    merged_filename = f"final_{uuid.uuid4().hex}.cs"
+    merged_path = os.path.join(TMP, merged_filename)
+    with open(merged_path, "w", encoding="utf-8") as f:
+        f.write(merged_code)
 
     return {
         "merged_file": merged_filename,
@@ -76,9 +135,9 @@ async def merge_code(file1: UploadFile = File(...), file2: UploadFile = File(...
 
 @app.get("/download/{filename}")
 async def download_file(filename: str):
-    file_path = os.path.join("/tmp", filename)
+    file_path = os.path.join(TMP, filename)
     if not os.path.exists(file_path):
-        return {"error": "File not found."}
+        raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(
         file_path,
         media_type="text/plain",

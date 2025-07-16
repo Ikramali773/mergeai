@@ -1,144 +1,173 @@
-import React, { useRef, useState } from 'react';
-import { Upload, File, X, CheckCircle } from 'lucide-react';
-import { UploadedFile } from '../hooks/useFileUpload';
+import React, { useState, useRef } from 'react';
+import { Upload, File, Loader2 } from 'lucide-react';
 
 interface FileUploadProps {
-  file?: UploadedFile;
-  onFileUpload: (file: File) => void;
-  onFileRemove: () => void;
-  slot: number;
+  onMerge: (fileA: File, fileB: File) => void;
   isLoading: boolean;
 }
 
-export const FileUpload: React.FC<FileUploadProps> = ({
-  file,
-  onFileUpload,
-  onFileRemove,
-  slot,
-  isLoading
-}) => {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isDragOver, setIsDragOver] = useState(false);
+export const FileUpload: React.FC<FileUploadProps> = ({ onMerge, isLoading }) => {
+  const [fileA, setFileA] = useState<File | null>(null);
+  const [fileB, setFileB] = useState<File | null>(null);
+  const [dragOverA, setDragOverA] = useState(false);
+  const [dragOverB, setDragOverB] = useState(false);
+  
+  const fileARef = useRef<HTMLInputElement>(null);
+  const fileBRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = (file: File, target: 'A' | 'B') => {
+    if (file.name.endsWith('.cs')) {
+      if (target === 'A') setFileA(file);
+      else setFileB(file);
+    } else {
+      alert('Please select a .cs file');
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, target: 'A' | 'B') => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileSelect(file, target);
+    if (target === 'A') setDragOverA(false);
+    else setDragOverB(false);
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    setIsDragOver(true);
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile && droppedFile.name.endsWith('.cs')) {
-      onFileUpload(droppedFile);
+  const handleMerge = () => {
+    if (fileA && fileB) {
+      onMerge(fileA, fileB);
     }
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      onFileUpload(selectedFile);
-    }
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  };
+  const canMerge = fileA && fileB && !isLoading;
 
   return (
-    <div className="w-full max-w-md mx-auto">
-      <label className="block text-sm font-medium text-gray-300 mb-3 font-mono">
-        File {slot + 1}
-      </label>
-      
-      {!file ? (
-        <div
-          className={`
-            relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer
-            transition-all duration-300 bg-glass backdrop-blur-sm
-            ${isDragOver 
-              ? 'border-accent-blue bg-blue-600/10 scale-105' 
-              : 'border-glass-border hover:border-accent-purple hover:bg-glass-border/30'
-            }
-            ${isLoading ? 'pointer-events-none opacity-50' : ''}
-          `}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".cs"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
-          
-          <Upload className={`w-12 h-12 mx-auto mb-4 transition-colors ${
-            isDragOver ? 'text-accent-blue' : 'text-gray-400'
-          }`} />
-          
-          <p className="text-gray-300 font-medium mb-2">
-            Drop your C# file here
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-8">
+      <div className="w-full max-w-4xl">
+        <div className="text-center mb-12">
+          <h1 className="text-4xl font-bold text-white mb-4">
+            Code Merge Workflow
+          </h1>
+          <p className="text-gray-400 text-lg">
+            Upload two C# files to merge and resolve conflicts
           </p>
-          <p className="text-gray-500 text-sm">
-            or <span className="text-accent-blue underline">browse to upload</span>
-          </p>
-          
-          {isLoading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-glass backdrop-blur-sm rounded-xl">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-blue"></div>
-            </div>
-          )}
         </div>
-      ) : (
-        <div className="bg-glass backdrop-blur-sm border border-glass-border rounded-xl p-6 animate-slide-up">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-3 flex-1 min-w-0">
-              <div className="flex-shrink-0">
-                <File className="w-8 h-8 text-accent-green" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-white font-medium truncate font-mono text-sm">
-                  {file.name}
-                </p>
-                <p className="text-gray-400 text-xs">
-                  {formatFileSize(file.size)}
-                </p>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <CheckCircle className="w-5 h-5 text-accent-green" />
-              <button
-                onClick={onFileRemove}
-                className="text-gray-400 hover:text-red-400 transition-colors p-1"
-              >
-                <X className="w-4 h-4" />
-              </button>
+
+        <div className="grid md:grid-cols-2 gap-8 mb-12">
+          {/* File A Upload Zone */}
+          <div
+            className={`relative border-2 border-dashed rounded-xl p-8 transition-all duration-300 cursor-pointer
+              ${dragOverA 
+                ? 'border-purple-500 bg-purple-500/10' 
+                : fileA 
+                  ? 'border-green-500 bg-green-500/10' 
+                  : 'border-gray-600 bg-gray-800/50 hover:border-purple-400 hover:bg-gray-800'
+              }`}
+            onDrop={(e) => handleDrop(e, 'A')}
+            onDragOver={handleDragOver}
+            onDragEnter={() => setDragOverA(true)}
+            onDragLeave={() => setDragOverA(false)}
+            onClick={() => fileARef.current?.click()}
+          >
+            <input
+              ref={fileARef}
+              type="file"
+              accept=".cs"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0], 'A')}
+            />
+            <div className="text-center">
+              {fileA ? (
+                <>
+                  <File className="mx-auto h-12 w-12 text-green-500 mb-4" />
+                  <h3 className="text-lg font-semibold text-white mb-2">File A Selected</h3>
+                  <p className="text-green-400 font-medium">{fileA.name}</p>
+                  <p className="text-gray-400 text-sm mt-1">
+                    {(fileA.size / 1024).toFixed(1)} KB
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                  <h3 className="text-lg font-semibold text-white mb-2">Upload File A</h3>
+                  <p className="text-gray-400">
+                    Drag & drop your .cs file here or click to browse
+                  </p>
+                </>
+              )}
             </div>
           </div>
-          
-          {/* File preview */}
-          <div className="mt-4 p-3 bg-gray-800/50 rounded-lg">
-            <p className="text-xs text-gray-400 mb-1 font-mono">Preview:</p>
-            <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap overflow-hidden line-clamp-3">
-              {file.content.slice(0, 120)}...
-            </pre>
+
+          {/* File B Upload Zone */}
+          <div
+            className={`relative border-2 border-dashed rounded-xl p-8 transition-all duration-300 cursor-pointer
+              ${dragOverB 
+                ? 'border-purple-500 bg-purple-500/10' 
+                : fileB 
+                  ? 'border-green-500 bg-green-500/10' 
+                  : 'border-gray-600 bg-gray-800/50 hover:border-purple-400 hover:bg-gray-800'
+              }`}
+            onDrop={(e) => handleDrop(e, 'B')}
+            onDragOver={handleDragOver}
+            onDragEnter={() => setDragOverB(true)}
+            onDragLeave={() => setDragOverB(false)}
+            onClick={() => fileBRef.current?.click()}
+          >
+            <input
+              ref={fileBRef}
+              type="file"
+              accept=".cs"
+              className="hidden"
+              onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0], 'B')}
+            />
+            <div className="text-center">
+              {fileB ? (
+                <>
+                  <File className="mx-auto h-12 w-12 text-green-500 mb-4" />
+                  <h3 className="text-lg font-semibold text-white mb-2">File B Selected</h3>
+                  <p className="text-green-400 font-medium">{fileB.name}</p>
+                  <p className="text-gray-400 text-sm mt-1">
+                    {(fileB.size / 1024).toFixed(1)} KB
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                  <h3 className="text-lg font-semibold text-white mb-2">Upload File B</h3>
+                  <p className="text-gray-400">
+                    Drag & drop your .cs file here or click to browse
+                  </p>
+                </>
+              )}
+            </div>
           </div>
         </div>
-      )}
+
+        {/* Merge Button */}
+        <div className="text-center">
+          <button
+            onClick={handleMerge}
+            disabled={!canMerge}
+            className={`relative px-12 py-4 rounded-xl font-semibold text-lg transition-all duration-300 transform
+              ${canMerge
+                ? 'bg-gradient-to-r from-purple-500 to-indigo-600 text-white hover:scale-105 hover:shadow-lg hover:shadow-purple-500/25 active:scale-95'
+                : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+              }`}
+          >
+            {isLoading ? (
+              <span className="flex items-center gap-3">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Processing...
+              </span>
+            ) : (
+              'Merge Files'
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
