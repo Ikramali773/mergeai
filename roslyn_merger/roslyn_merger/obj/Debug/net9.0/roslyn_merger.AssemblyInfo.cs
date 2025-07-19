@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("roslyn_merger")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5bf0a79fa947066da2a11a55fcb8a117df355a76")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e6f22d6b89e7958b224609ebdc29747249af6a95")]
 [assembly: System.Reflection.AssemblyProductAttribute("roslyn_merger")]
 [assembly: System.Reflection.AssemblyTitleAttribute("roslyn_merger")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

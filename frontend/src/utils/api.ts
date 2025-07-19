@@ -1,59 +1,56 @@
-const API_BASE_URL = 'http://localhost:8000';
+// src/utils/api.ts
 
-export const mergeFiles = async (fileA: File, fileB: File): Promise<{
-  merged_file: string;
-  logs: any[];
-  download_url: string;
-}> => {
-  const formData = new FormData();
-  formData.append('file1', fileA);
-  formData.append('file2', fileB);
+import axios from 'axios';
+import type { MergeResponse, Resolution } from '../types/merge';
 
-  const response = await fetch(`${API_BASE_URL}/merge`, {
-    method: 'POST',
-    body: formData,
+const API_BASE = 'http://localhost:8000';
+
+export async function mergeFiles(
+  file1: File,
+  file2: File
+): Promise<MergeResponse> {
+  const form = new FormData();
+  form.append('file1', file1);
+  form.append('file2', file2);
+
+  const { data } = await axios.post<MergeResponse>(
+    `${API_BASE}/merge`,
+    form,
+    {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }
+  );
+
+  return data;
+}
+
+export async function resolveMerge(
+  file1: File,
+  file2: File,
+  resolutions: Resolution[]
+): Promise<MergeResponse> {
+  const form = new FormData();
+  form.append('file1', file1);
+  form.append('file2', file2);
+
+  // Resolutions JSON must be sent as a field named "resolutions"
+  const jsonBlob = new Blob([JSON.stringify(resolutions)], {
+    type: 'application/json',
   });
+  form.append('resolutions', jsonBlob, 'resolutions.json');
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Merge failed');
-  }
+  const { data } = await axios.post<MergeResponse>(
+    `${API_BASE}/merge/resolve`,
+    form,
+    {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }
+  );
 
-  return response.json();
-};
+  return data;
+}
 
-export const resolveConflicts = async (
-  fileA: File, 
-  fileB: File, 
-  resolutions: Array<{ Id: number; Choice: 'A' | 'B' | 'Both' }>
-): Promise<{
-  merged_file: string;
-  logs: any[];
-  download_url: string;
-}> => {
-  const formData = new FormData();
-  formData.append('file1', fileA);
-  formData.append('file2', fileB);
-  
-  // Convert resolutions to JSON blob
-  const resolutionsBlob = new Blob([JSON.stringify(resolutions)], {
-    type: 'application/json'
-  });
-  formData.append('resolutions', resolutionsBlob, 'resolutions.json');
-
-  const response = await fetch(`${API_BASE_URL}/merge/resolve`, {
-    method: 'POST',
-    body: formData,
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Conflict resolution failed');
-  }
-
-  return response.json();
-};
-
-export const downloadFile = (filename: string): string => {
-  return `${API_BASE_URL}/download/${filename}`;
-};
+export async function downloadFile(downloadUrl: string): Promise<string> {
+  const res = await axios.get<string>(`${API_BASE}${downloadUrl}`);
+  return res.data;
+}
